@@ -149,7 +149,7 @@ def getAnalysis(tweet):
     
     total = 0
     for r in result:
-        print(r["sentiment"])
+        # print(r["sentiment"])
         total += r["sentiment"]
     total = total / len(result)
     if total > 0:
@@ -158,6 +158,7 @@ def getAnalysis(tweet):
         tweet["sentiment"] = "NEUTRAL"
     else:
         tweet["sentiment"] = "BAD"
+    print("Tweet: " + tweet["text"] + "\n")
     print("Sentiment: " + tweet["sentiment"])
     print("Total: " + str(total))
     return tweet
@@ -169,7 +170,7 @@ def main():
     getMoreRelevants()
     printData(MORE_RELEVANTS, True)
     calcTheEmotion("i hate soccer")
-    getAnalysis(getTweetById(1000448152737140736))
+    getAnalysis(getTweetById(1000448036462579713))
             
 
 if __name__ == "__main__":
