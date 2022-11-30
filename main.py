@@ -6,33 +6,60 @@ import pycld2 as cld2
 from deep_translator import GoogleTranslator
 from nltk.corpus import sentiwordnet as swn
 import emoji
+import spacy
+import secretskeys
+import tweepy
 
 try:
-    _create_unverified_https_context = ssl._create_unverified_context
-except AttributeError:
-    pass
-else:
-    ssl._create_default_https_context = _create_unverified_https_context
+    auth = tweepy.OAuthHandler(secretskeys.TWITTER_API_KEY,
+                               secretskeys.TWITTER_API_KEY_SECRET,
+                               secretskeys.TWITTER_ACCESS_TOKEN,
+                               secretskeys.TWITTER_ACCESS_TOKEN_SECRET)
+    api = tweepy.API(auth)
+except Exception as e:
+    print("Error on start twitter - " + e)
+    exit()
 
-# nltk.download()
-nltk.download('punkt')
-nltk.download('wordnet')
-nltk.download('omw-1.4')
-nltk.download('sentiwordnet')
+nlp = spacy.load("en_core_web_sm")
 
-EMOJIS = [emoji.emojize(":smile:"), emoji.emojize(":expressionless:"), emoji.emojize(":disappointed:")]
-# EMOJIS = ["GOOD", "NEUTRAL", "BAD"]
+shouldAskIdiom = False
+
+
+def startNltk():
+    try:
+        _create_unverified_https_context = ssl._create_unverified_context
+    except AttributeError:
+        pass
+    else:
+        ssl._create_default_https_context = _create_unverified_https_context
+
+    nltk.download('punkt')
+    nltk.download('wordnet')
+    nltk.download('omw-1.4')
+    nltk.download('sentiwordnet')
+
+
+LOG_THINGS = True
+
+EMOJIS = [
+    emoji.emojize(":smile:"),
+    emoji.emojize(":expressionless:"),
+    emoji.emojize(":disappointed:")
+]
 
 DATA = []
-
-MORE_RELEVANTS = []
+DATA_WITH_RELEVANT_ENTITIES = []
 
 USERS_POPULAR = []
 
-def getTextLanguage(text):
+ENTITIES = []
+ENTITIES_MORE_RELEVANTS = []
+
+
+def getTextLanguage(text, userInput=False):
     isReliable, textBytesFound, details = cld2.detect(text)
     # print(wn.langs())
-    language = details[0][1]
+    language = userInput if userInput != False else details[0][1]
     if language == 'en':
         return {"original": "en", "nltk": "eng"}
     elif language == 'pt':
@@ -49,8 +76,18 @@ def getTextLanguage(text):
         return {"original": "nl", "nltk": "nld"}
     elif language == 'pl':
         return {"original": "pl", "nltk": "pol"}
+    elif language == 'ru':
+        return {"original": "ru", "nltk": "rus"}
     else:
-        return {"original": "en", "nltk": "eng"}
+        if shouldAskIdiom:
+            print("\nTweet:\n" + text + "\n")
+            userInput = input(
+                "Language not found or not detected. Please, enter the language code or press enter to continue with english (en): "
+            )
+            return getTextLanguage(text, userInput)
+        else:
+            return {"original": "en", "nltk": "eng"}
+
 
 def defineEmoji(sentiment):
     if sentiment > 0.0:
@@ -60,50 +97,76 @@ def defineEmoji(sentiment):
     else:
         return EMOJIS[2]
 
+
+def getTheScoreAndSentiment(word):
+    wordSentiment = False
+    score = 0.0
+
+    try:
+        wordSynsets = wn.synsets(word)
+
+        if (len(wordSynsets) <= 0):
+            return score, wordSentiment
+
+        wordSentiment = swn.senti_synset(wordSynsets.pop().name())
+        score = sum([wordSentiment.pos_score() - wordSentiment.neg_score()])
+        # if LOG_THINGS == True and score != 0.0:
+        #     print("-" * 25 + " " + word + " " + "-" * 25)
+        #     print("Sentiment - " + str(wordSentiment) + "\nScore - " +
+        #           str(score))
+    except Exception as e:
+        if LOG_THINGS == True:
+            print("Error on get sentiment - " + e)
+        pass
+    return score, wordSentiment
+
+
 def calcTheEmotion(tweet):
     tokens = nltk.word_tokenize(tweet)
     text = nltk.Text(tokens)
 
     language = getTextLanguage(tweet)
-    # print(language)
 
     finalResult = []
 
     for w in text.vocab():
         if w.isalpha():
-            wordToCalculateSentiment = w if language["original"] == "en" else GoogleTranslator(source=language["original"], target='en').translate(w)
-            wordSentiment = False
-            score = 0.0
-            try:
-                wordSentiment = swn.senti_synset(wn.synsets(wordToCalculateSentiment).pop().name())
-                score = wordSentiment.pos_score() - wordSentiment.neg_score()
-            except:
-                pass
+            wordToCalculateSentiment = w if language[
+                "original"] == "en" else GoogleTranslator(
+                    source=language["original"], target='en').translate(w)
 
-            
-            obj = {
+            for word in wordToCalculateSentiment.split(" "):
+                score, wordSentiment = getTheScoreAndSentiment(word)
+
+                obj = {
                     "word": w,
                     'synonyms': [],
                     'count': text.count(w),
                     'sentiment': score if wordSentiment else 0,
-                    'sentiment-data': str(wordSentiment) if wordSentiment else None,
+                    'sentiment-data':
+                    str(wordSentiment) if wordSentiment else None,
                     'emoji': emoji.demojize(defineEmoji(score))
                 }
-            for syn in wn.synsets(w, lang=language["nltk"])[:10]:
-                word = syn.name().split('.')[0].replace('_', ' ')
-                finalWord = GoogleTranslator(source="en", target=language["original"]).translate(word)
-                if finalWord == w:
-                    pass
-                else:
-                    obj["synonyms"].append({
-                        "word": word if (language["nltk"] == "eng") else finalWord,
-                        "original": word,
-                        'definition': syn.definition(),
-                    })
-            # print(json.dumps(obj, indent=4))
-            finalResult.append(obj)
+
+                for syn in wn.synsets(w, lang=language["nltk"])[:10]:
+                    word = syn.name().split('.')[0].replace('_', ' ')
+                    finalWord = GoogleTranslator(
+                        source="en",
+                        target=language["original"]).translate(word)
+                    if finalWord == w:
+                        pass
+                    else:
+                        obj["synonyms"].append({
+                            "word":
+                            word if (language["nltk"] == "eng") else finalWord,
+                            "original":
+                            word,
+                            'definition':
+                            syn.definition(),
+                        })
+                finalResult.append(obj)
     return finalResult
-    
+
 
 def printData(dataSet, beautiful=False):
     for data in dataSet:
@@ -112,66 +175,205 @@ def printData(dataSet, beautiful=False):
         else:
             print(json.dumps(data, indent=4))
 
+
 def beautifulPrint(obj):
     print("-" * 80)
-    print("@" + obj["user"]["screen_name"] + " - " + str(obj["user"]["followers_count"]) + " - " + str(obj["id"]) + "\n\n" + obj["text"])
+    print("@" + obj["user"]["screen_name"] + " - " +
+          str(obj["user"]["followers_count"]) + " - " + str(obj["id"]) +
+          "\n\n" + obj["text"])
+    jsonLoad = json.loads(json.dumps(obj))
+    if "sentiment" in jsonLoad:
+        print("Sentiment: " + obj["sentiment"])
+    if "sentiment-total" in jsonLoad:
+        print("Total: " + str(obj["sentiment-total"]))
+    if "entities" in jsonLoad:
+        print("Entities: ")
+        printATweetEntities(obj["entities"])
     print("-" * 80)
     print("\n\n\n")
 
-def reorderForPopularity():
-    USERS_POPULAR.sort(key=lambda x: x["user"]["followers_count"], reverse=True)
-    USERS_POPULAR[:] = USERS_POPULAR[:30]
+
+def reorderEntitiesForPopularity():
+    ENTITIES_MORE_RELEVANTS.sort(key=lambda x: x["count"], reverse=True)
 
 
-def getMoreRelevants():
-    for data in DATA:
-        if data["user"]["followers_count"] > 1000:
-            MORE_RELEVANTS.append(data)
+def verifyIfEntityIsInRelevantList(entity):
+    for ent in ENTITIES_MORE_RELEVANTS:
+        if ent["entity"] == entity["entity"]:
+            return True
+    return False
 
-def readAndPopulateData():
-    with open("data.min.json", "r") as file:
-        for line in file:
-            try:
-                json_object = json.loads(line)
-                if json_object["user"]:
-                    DATA.append(json_object)
-                    USERS_POPULAR.append(json_object)
-            except:
-                pass
+
+def getMoreRelevantEntities():
+    for entitie in ENTITIES:
+        if not verifyIfEntityIsInRelevantList(entitie):
+            entitie["count"] = 1
+            ENTITIES_MORE_RELEVANTS.append(entitie)
+        else:
+            for ent in ENTITIES_MORE_RELEVANTS:
+                if ent["entity"] == entitie["entity"]:
+                    ent["count"] += 1
+
+    reorderEntitiesForPopularity()
+    ENTITIES_MORE_RELEVANTS[:] = ENTITIES_MORE_RELEVANTS[:10]
+    if LOG_THINGS == True:
+        print("-" * 80)
+        print("Entities length - " + str(len(ENTITIES)))
+        print("Entities more relevants length - " +
+              str(len(ENTITIES_MORE_RELEVANTS)))
+        print("-" * 80)
+        print("Entities more relevants - ")
+        print(json.dumps(ENTITIES_MORE_RELEVANTS, indent=4))
+
+
+def getTweetEntities(tweet):
+    doc = nlp(tweet)
+    entities = []
+    for ent in doc.ents:
+        if LOG_THINGS == True:
+            print(ent.text, ent.label_)
+        entities.append({
+            "entity": ent.text,
+            "type": ent.label_,
+        })
+    return entities
+
+
+def findTweetsInTwitter(search):
+    tweets = api.search_tweets(q=search, lang="en", count=10000)
+
+    for tweet in tweets:
+        tweet_json = tweet._json
+        entities = getTweetEntities(tweet_json["text"])
+        tweet_json["entities"] = entities
+        ENTITIES.extend(entities)
+        DATA.append(tweet_json)
+        USERS_POPULAR.append(tweet_json)
+
+        if LOG_THINGS == True:
+            beautifulPrint(tweet_json)
+            print("\n\nTweets found - " + str(len(tweets)))
+
+
+def readAndPopulateData(searchBy):
+    if len(searchBy) > 0:
+        findTweetsInTwitter(searchBy)
+    else:
+        with open("data.min.json", "r") as file:
+            for line in file:
+                try:
+                    json_object = json.loads(line)
+                    if json_object["user"]:
+                        DATA.append(json_object)
+                        USERS_POPULAR.append(json_object)
+                except:
+                    pass
+
 
 def getTweetById(id):
     for data in DATA:
         if data["id"] == id:
             return data
 
+
+def printATweetEntities(entities):
+    for ent in entities:
+        print(ent["entity"] + " - " + ent["type"])
+
+
 def getAnalysis(tweet):
     result = calcTheEmotion(tweet["text"])
-    
+
     total = 0
+    differentOfZero = 0
     for r in result:
         # print(r["sentiment"])
         total += r["sentiment"]
-    total = total / len(result)
+        if r["sentiment"] != 0:
+            differentOfZero += 1
+    if differentOfZero == 0:
+        differentOfZero = 1
+    total = total / differentOfZero
     if total > 0:
         tweet["sentiment"] = "GOOD"
     elif total == 0:
         tweet["sentiment"] = "NEUTRAL"
     else:
         tweet["sentiment"] = "BAD"
-    print("Tweet: " + tweet["text"] + "\n")
-    print("Sentiment: " + tweet["sentiment"])
-    print("Total: " + str(total))
+    tweet["sentiment-total"] = total
+    beautifulPrint(tweet)
     return tweet
 
+
+def getUserInputId():
+    while True:
+        userInputId = input("Enter the tweet id: ")
+        try:
+            userInputId = int(userInputId)
+
+            return userInputId
+        except:
+            print("Invalid input. Please try again.")
+
+
+def getOnlyTweetsWithRelevantEntities():
+    break_second_loop = False
+
+    for tweet in DATA:
+        for ent in tweet["entities"]:
+            for relevantEnt in ENTITIES_MORE_RELEVANTS:
+                if ent["entity"] == relevantEnt["entity"]:
+                    DATA_WITH_RELEVANT_ENTITIES.append(tweet)
+                    break_second_loop = True
+                    break
+            if break_second_loop:
+                break_second_loop = False
+                break
+
+    print("DATA length - " + str(len(DATA)))
+    print("DATA_WITH_RELEVANT_ENTITIES length - " +
+          str(len(DATA_WITH_RELEVANT_ENTITIES)))
+
+
+def getUserInput(text):
+    while True:
+        userInput = input(text)
+        try:
+            return userInput
+        except:
+            print("Invalid input. Please try again.")
+
+
 def main():
-    readAndPopulateData()
-    # printData()
-    reorderForPopularity()
-    getMoreRelevants()
-    printData(MORE_RELEVANTS, True)
-    calcTheEmotion("i hate soccer")
-    getAnalysis(getTweetById(1000448036462579713))
-            
+    askUser = input("Do you want anaise a sentence? (y/n) (Default: n) ")
+
+    if askUser == "y":
+        userInput = input("Enter the quote: ")
+        print(getAnalysis({"text": userInput}))
+        return 0
+
+    startNltk()
+
+    askIdiom = input(
+        "Do you want to be notified if a idiom is not found? (y/n) (Default: n) "
+    )
+
+    if askIdiom == "y":
+        shouldAskIdiom = True
+
+    searchBy = getUserInput(
+        "Search by (press enter if want to use the default data by JSON file): "
+    )
+
+    readAndPopulateData(searchBy)
+
+    getMoreRelevantEntities()
+
+    getOnlyTweetsWithRelevantEntities()
+
+    for tweet in DATA_WITH_RELEVANT_ENTITIES:
+        getAnalysis(tweet)
+
 
 if __name__ == "__main__":
     main()
