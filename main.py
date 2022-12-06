@@ -9,6 +9,7 @@ import emoji
 import spacy
 import secretskeys
 import tweepy
+import matplotlib.pyplot as plt
 
 try:
     auth = tweepy.OAuthHandler(secretskeys.TWITTER_API_KEY,
@@ -39,7 +40,9 @@ def startNltk():
     nltk.download('sentiwordnet')
 
 
-LOG_THINGS = True
+LOG_THINGS = False
+
+MAX_LENGTH = 100
 
 EMOJIS = [
     emoji.emojize(":smile:"),
@@ -78,6 +81,8 @@ def getTextLanguage(text, userInput=False):
         return {"original": "pl", "nltk": "pol"}
     elif language == 'ru':
         return {"original": "ru", "nltk": "rus"}
+    elif language == 'jpn':
+        return {"original": "jpn", "nltk": "jpn"}
     else:
         if shouldAskIdiom:
             print("\nTweet:\n" + text + "\n")
@@ -208,6 +213,7 @@ def getMoreRelevantEntities():
     for entitie in ENTITIES:
         if not verifyIfEntityIsInRelevantList(entitie):
             entitie["count"] = 1
+            entitie["sentiment-calcs"] = []
             ENTITIES_MORE_RELEVANTS.append(entitie)
         else:
             for ent in ENTITIES_MORE_RELEVANTS:
@@ -239,11 +245,20 @@ def getTweetEntities(tweet):
     return entities
 
 
-def findTweetsInTwitter(search):
-    tweets = api.search_tweets(q=search, lang="en", count=10000)
+def findTweetsInTwitter(search, tweets=[]):
+    if len(tweets) == 0:
+        tweets = tweepy.Cursor(
+            api.search_tweets, q=search,
+            lang="en").items(MAX_LENGTH if MAX_LENGTH != False else 100)
+
+    length = 0
 
     for tweet in tweets:
-        tweet_json = tweet._json
+        length += 1
+        if len(search) > 0:
+            tweet_json = tweet._json
+        else:
+            tweet_json = tweet
         entities = getTweetEntities(tweet_json["text"])
         tweet_json["entities"] = entities
         ENTITIES.extend(entities)
@@ -252,22 +267,29 @@ def findTweetsInTwitter(search):
 
         if LOG_THINGS == True:
             beautifulPrint(tweet_json)
-            print("\n\nTweets found - " + str(len(tweets)))
+            print("\n\nTweets found - " + str(length))
 
 
 def readAndPopulateData(searchBy):
     if len(searchBy) > 0:
-        findTweetsInTwitter(searchBy)
+        findTweetsInTwitter(searchBy, [])
     else:
+        objects = []
+        length = 0
         with open("data.min.json", "r") as file:
             for line in file:
                 try:
                     json_object = json.loads(line)
                     if json_object["user"]:
-                        DATA.append(json_object)
-                        USERS_POPULAR.append(json_object)
+                        objects.append(json_object)
                 except:
                     pass
+                if MAX_LENGTH != False:
+                    length += 1
+                    if length == MAX_LENGTH:
+                        break
+
+        findTweetsInTwitter("", objects)
 
 
 def getTweetById(id):
@@ -282,6 +304,8 @@ def printATweetEntities(entities):
 
 
 def getAnalysis(tweet):
+    entitie = tweet["entities"][0]
+
     result = calcTheEmotion(tweet["text"])
 
     total = 0
@@ -294,6 +318,17 @@ def getAnalysis(tweet):
     if differentOfZero == 0:
         differentOfZero = 1
     total = total / differentOfZero
+
+    indexInRELEVANT_ENTITIES = 0
+
+    for ent in ENTITIES_MORE_RELEVANTS:
+        for tweetEnt in tweet["entities"]:
+            if ent["entity"] == tweetEnt["entity"]:
+                if indexInRELEVANT_ENTITIES < len(ENTITIES_MORE_RELEVANTS):
+                    ENTITIES_MORE_RELEVANTS[indexInRELEVANT_ENTITIES][
+                        "sentiment-calcs"].append(total)
+        indexInRELEVANT_ENTITIES += 1
+
     if total > 0:
         tweet["sentiment"] = "GOOD"
     elif total == 0:
@@ -301,7 +336,10 @@ def getAnalysis(tweet):
     else:
         tweet["sentiment"] = "BAD"
     tweet["sentiment-total"] = total
-    beautifulPrint(tweet)
+
+    if LOG_THINGS == True:
+        beautifulPrint(tweet)
+
     return tweet
 
 
@@ -344,22 +382,27 @@ def getUserInput(text):
             print("Invalid input. Please try again.")
 
 
+def showGraph():
+    x = []
+    y = []
+    for ent in ENTITIES_MORE_RELEVANTS:
+        x.append(ent["entity"])
+        y.append(ent["sentiment-total"])
+
+    plt.ylim(-1, 1)
+    plt.bar(x, y)
+    plt.show()
+
+
 def main():
-    askUser = input("Do you want anaise a sentence? (y/n) (Default: n) ")
-
-    if askUser == "y":
-        userInput = input("Enter the quote: ")
-        print(getAnalysis({"text": userInput}))
-        return 0
-
     startNltk()
 
-    askIdiom = input(
-        "Do you want to be notified if a idiom is not found? (y/n) (Default: n) "
-    )
+    # askIdiom = input(
+    #     "Do you want to be notified if a idiom is not found? (y/n) (Default: n) "
+    # )
 
-    if askIdiom == "y":
-        shouldAskIdiom = True
+    # if askIdiom == "y":
+    #     shouldAskIdiom = True
 
     searchBy = getUserInput(
         "Search by (press enter if want to use the default data by JSON file): "
@@ -373,6 +416,21 @@ def main():
 
     for tweet in DATA_WITH_RELEVANT_ENTITIES:
         getAnalysis(tweet)
+
+    for ent in ENTITIES_MORE_RELEVANTS:
+        total = 0.0
+        for calc in ent["sentiment-calcs"]:
+            total += calc
+        if total != 0:
+            total = total / len(ent["sentiment-calcs"])
+        else:
+            total = 0.0
+        ent["sentiment-total"] = total
+
+        if LOG_THINGS == True:
+            print(json.dumps(ent, indent=4))
+
+    showGraph()
 
 
 if __name__ == "__main__":
