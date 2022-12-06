@@ -42,7 +42,7 @@ def startNltk():
 
 LOG_THINGS = False
 
-MAX_LENGTH = 100
+MAX_LENGTH = 300
 
 EMOJIS = [
     emoji.emojize(":smile:"),
